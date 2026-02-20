@@ -8,4 +8,14 @@ layout:
 - go.kubebuilder.io/v4
 projectName: tenant-operator
 repo: github.com/zbn0922/tenant-operator
+resources:
+- api:
+    crdVersion: v1
+    namespaced: true
+  controller: true
+  domain: my.domain
+  group: tenant
+  kind: Tenant
+  path: github.com/zbn0922/tenant-operator/api/v1
+  version: v1
 version: "3"
