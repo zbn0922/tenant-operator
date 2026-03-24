@@ -32,8 +32,59 @@ type TenantSpec struct {
 
 	// foo is an example field of Tenant. Edit tenant_types.go to remove/update
 	// +optional
-	Foo *string `json:"foo,omitempty"`
+	Foo           *string            `json:"foo,omitempty"`
+	Owner         string             `json:"owner"`
+	Namespace     NamespaceSpec      `json:"namespace"`
+	Quota         *QuotaSpec         `json:"quota,omitempty"`
+	LimitRange    *LimitRangeSpec    `json:"limitRange,omitempty"`
+	NetworkPolicy *NetworkPolicySpec `json:"networkPolicy,omitempty"`
+	RBAC          *RBACSpec          `json:"rbac,omitempty"`
 }
+type NamespaceSpec struct {
+	Name string `json:"name"`
+}
+
+type QuotaSpec struct {
+	CPU                    string `json:"cpu,omitempty"`
+	Memory                 string `json:"memory,omitempty"`
+	Pods                   int32  `json:"pods,omitempty"`
+	Services               int32  `json:"services,omitempty"`
+	PersistentVolumeClaims int32  `json:"persistentVolumeClaims,omitempty"`
+}
+
+type LimitRangeSpec struct {
+	DefaultCPURequest    string `json:"defaultCpuRequest,omitempty"`
+	DefaultMemoryRequest string `json:"defaultMemoryRequest,omitempty"`
+	DefaultCPULimit      string `json:"defaultCpuLimit,omitempty"`
+	DefaultMemoryLimit   string `json:"defaultMemoryLimit,omitempty"`
+}
+
+type NetworkPolicyMode string
+
+const (
+	NetworkPolicyModeIsolated NetworkPolicyMode = "Isolated"
+	NetworkPolicyModeOpen     NetworkPolicyMode = "Open"
+)
+
+type NetworkPolicySpec struct {
+	Mode NetworkPolicyMode `json:"mode,omitempty"`
+}
+
+type RBACSpec struct {
+	AdminUsers []string `json:"adminUsers,omitempty"`
+	ViewUsers  []string `json:"viewUsers,omitempty"`
+}
+
+type TenantPhase string
+
+const (
+	TenantPhasePending  TenantPhase = "Pending"
+	TenantPhaseCreating TenantPhase = "Creating"
+	TenantPhaseReady    TenantPhase = "Ready"
+	TenantPhaseUpdating TenantPhase = "Updating"
+	TenantPhaseDeleting TenantPhase = "Deleting"
+	TenantPhaseFailed   TenantPhase = "Failed"
+)
 
 // TenantStatus defines the observed state of Tenant.
 type TenantStatus struct {
@@ -55,7 +106,11 @@ type TenantStatus struct {
 	// +listType=map
 	// +listMapKey=type
 	// +optional
-	Conditions []metav1.Condition `json:"conditions,omitempty"`
+	Conditions         []metav1.Condition `json:"conditions,omitempty"`
+	Phase              TenantPhase        `json:"phase,omitempty"`
+	ObservedGeneration int64              `json:"observedGeneration,omitempty"`
+	Namespace          string             `json:"namespace,omitempty"`
+	LastError          string             `json:"lastError,omitempty"`
 }
 
 // +kubebuilder:object:root=true
