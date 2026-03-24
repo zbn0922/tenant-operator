@@ -20,7 +20,9 @@ import (
 	"context"
 
 	corev1 "k8s.io/api/core/v1"
+	apiequality "k8s.io/apimachinery/pkg/api/equality"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	ctrl "sigs.k8s.io/controller-runtime"
@@ -38,6 +40,7 @@ type TenantReconciler struct {
 }
 
 const TenantFinalizer = "tenant.zbn0922.github.com/finalizer"
+const tenantResourceQuotaName = "tenant-resource-quota"
 
 // +kubebuilder:rbac:groups=tenant.my.domain,resources=tenants,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups=tenant.my.domain,resources=tenants/status,verbs=get;update;patch
@@ -55,8 +58,6 @@ const TenantFinalizer = "tenant.zbn0922.github.com/finalizer"
 // - https://pkg.go.dev/sigs.k8s.io/controller-runtime@v0.23.1/pkg/reconcile
 func (r *TenantReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
 	_ = logf.FromContext(ctx)
-
-	// TODO(user): your logic here
 	// 1、从cache获取资源
 	var tenant tenantv1.Tenant
 	if err := r.Get(ctx, req.NamespacedName, &tenant); err != nil {
@@ -90,10 +91,17 @@ func (r *TenantReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctr
 		}
 	}
 	// 4、创建命名空间
-	if res, err := r.CreateNamespace(ctx, &tenant); err != nil || res != nil {
+	if res, err := r.EnsureNamespace(ctx, &tenant); err != nil || res != nil {
 		return DefaultIfEmpty(res), err
 	}
-	// 5、
+	// 5、创建resource quota
+	if res, err := r.EnsureResourceQuota(ctx, &tenant); err != nil || res != nil {
+		return DefaultIfEmpty(res), err
+	}
+	// 6、创建limit range
+	// 7、创建network policy
+	// 8、创建role binding
+	// 9、更新状态为Ready
 	return ctrl.Result{}, nil
 }
 
@@ -112,7 +120,7 @@ func DefaultIfEmpty(res *ctrl.Result) ctrl.Result {
 	return ctrl.Result{}
 }
 
-func (r *TenantReconciler) CreateNamespace(ctx context.Context, tenant *tenantv1.Tenant) (*ctrl.Result, error) {
+func (r *TenantReconciler) EnsureNamespace(ctx context.Context, tenant *tenantv1.Tenant) (*ctrl.Result, error) {
 	var ns corev1.Namespace
 	key := client.ObjectKey{Name: desiredNamespaceName(tenant)}
 	if err := r.Get(ctx, key, &ns); err != nil {
@@ -152,11 +160,72 @@ func (r *TenantReconciler) CreateNamespace(ctx context.Context, tenant *tenantv1
 		return &ctrl.Result{Requeue: true}, nil
 	}
 
-	if err := r.updateTenantStatus(ctx, tenant, tenantv1.TenantPhaseReady, ns.Name, ""); err != nil {
-		return nil, err
-	}
 	// 如果既没有更新也没有创建，直接取下一步进行判断
 	return nil, nil
+}
+func (r *TenantReconciler) EnsureResourceQuota(ctx context.Context, tenant *tenantv1.Tenant) (*ctrl.Result, error) {
+	if tenant.Spec.Quota == nil {
+		return nil, nil
+	}
+
+	// 查询缓存中是否存在
+	key := client.ObjectKey{Name: tenant.Spec.Owner, Namespace: desiredNamespaceName(tenant)}
+	var rq corev1.ResourceQuota
+	if err := r.Get(ctx, key, &rq); err != nil {
+		if apierrors.IsNotFound(err) {
+			// 创建 ResourceQuota
+			rq := corev1.ResourceQuota{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      tenant.Spec.Owner,
+					Namespace: desiredNamespaceName(tenant),
+				},
+				Spec: corev1.ResourceQuotaSpec{
+					Hard: quotaSpecToResourceList(tenant.Spec.Quota),
+				},
+			}
+			if err := r.Create(ctx, &rq); err != nil {
+				return nil, err
+			}
+			return &ctrl.Result{Requeue: true}, nil
+		}
+		return nil, err
+	}
+
+	// 已存在时，做最小校正
+	desiredHard := quotaSpecToResourceList(tenant.Spec.Quota)
+	if !apiequality.Semantic.DeepEqual(rq.Spec.Hard, desiredHard) {
+		rq.Spec.Hard = desiredHard
+		if err := r.Update(ctx, &rq); err != nil {
+			return nil, err
+		}
+		return &ctrl.Result{Requeue: true}, nil
+	}
+	return nil, nil
+}
+
+func quotaSpecToResourceList(quota *tenantv1.QuotaSpec) corev1.ResourceList {
+	hard := corev1.ResourceList{}
+	if quota == nil {
+		return hard
+	}
+
+	if quota.CPU != "" {
+		hard[corev1.ResourceLimitsCPU] = resource.MustParse(quota.CPU)
+	}
+	if quota.Memory != "" {
+		hard[corev1.ResourceLimitsMemory] = resource.MustParse(quota.Memory)
+	}
+	if quota.Pods > 0 {
+		hard[corev1.ResourcePods] = *resource.NewQuantity(int64(quota.Pods), resource.DecimalSI)
+	}
+	if quota.Services > 0 {
+		hard[corev1.ResourceServices] = *resource.NewQuantity(int64(quota.Services), resource.DecimalSI)
+	}
+	if quota.PersistentVolumeClaims > 0 {
+		hard[corev1.ResourcePersistentVolumeClaims] = *resource.NewQuantity(int64(quota.PersistentVolumeClaims), resource.DecimalSI)
+	}
+
+	return hard
 }
 
 func (r *TenantReconciler) cleanupTenant(ctx context.Context, tenant *tenantv1.Tenant) error {
